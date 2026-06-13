@@ -1,6 +1,11 @@
 name: Telegram Video Generator Bot
 
-on: [push, workflow_dispatch] # This ensures it runs INSTANTLY on any file save/commit
+on: [push, workflow_dispatch]
+
+# THIS IS THE FIX: It cancels any currently running bot when you push new code!
+concurrency:
+  group: telegram-bot
+  cancel-in-progress: true
 
 jobs:
   run-bot:
