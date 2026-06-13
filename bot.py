@@ -158,7 +158,6 @@ def handle_set_kaggle(message):
         os.environ['KAGGLE_USERNAME'] = parts[1].strip()
         os.environ['KAGGLE_KEY'] = parts[2].strip()
         bot.reply_to(message, "✅ Kaggle credentials set successfully! You can now use `/fetch_dataset`.", parse_mode="Markdown")
-        # Try to load history now that we have credentials
         load_history()
     else:
         bot.reply_to(message, "⚠️ Usage: `/set_kaggle <username> <api_key>`", parse_mode="Markdown")
@@ -306,16 +305,36 @@ def chunk_text(text, max_chars):
 def is_bingo_trigger(word_text):
     return re.sub(r'[^a-zA-Z0-9]', '', word_text).lower() in ["bingo", "bingos", "bingobingo"]
 
+# ==========================================
+# UPDATED HASHTAG & TITLE ENGINE
+# ==========================================
 def generate_title_and_hashtags(transcribed_text):
-    fallback_output = "Cinematic Video\n#video #shorts #viral #reels #foryou"
-    if not transcribed_text or len(transcribed_text.strip()) < 3: return fallback_output
+    words = transcribed_text.split()
+    first_line_title = " ".join(words[:10]) + ("..." if len(words) > 10 else "")
+    fallback_output = f"{first_line_title}\n#Country #Language"
+    
+    if not transcribed_text or len(transcribed_text.strip()) < 3: 
+        return fallback_output
         
-    prompt = f"Create a short video title on line 1 based on: '{transcribed_text}'. On line 2, output exactly 5 viral short-tail hashtags. The first 3 hashtags must be related to the topic. The 4th hashtag MUST be the specific country, and the 5th hashtag MUST be the specific language. Keep the ENTIRE output strictly in the exact same language as the text. NO emojis. ONLY two lines."
+    # Check if Kaggle credentials are set (required for kbench LLM to deduce country)
+    if not os.environ.get('KAGGLE_USERNAME') or not os.environ.get('KAGGLE_KEY'):
+        return fallback_output
+        
+    prompt = (
+        f"Text: '{transcribed_text}'\n"
+        f"Task: On line 1, output the exact first sentence (or first 10 words) of the text to use as the video title. "
+        f"On line 2, output exactly 2 hashtags ONLY: the specific Country and the specific Language related to the text. "
+        f"Do not include the first 3 topic hashtags anymore. NO emojis. ONLY two lines total."
+    )
     for _ in range(3):
         try:
             response = kbench.llm.prompt(prompt).replace('```', '').replace('<', '').replace('>', '').strip()
-            if len(response.split()) >= 3: return response
-        except: time.sleep(2)
+            lines = [line.strip() for line in response.split('\n') if line.strip()]
+            if len(lines) >= 2: 
+                return f"{lines[0]}\n{lines[-1]}"
+        except: 
+            time.sleep(2)
+            
     return fallback_output
 
 def scan_multi_datasets(input_dir=INPUT_DIR):
