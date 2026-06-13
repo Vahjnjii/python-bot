@@ -1,14 +1,10 @@
 name: Telegram Video Generator Bot
 
-on:
-  push:
-    branches: [ main, master ]
-  workflow_dispatch: # Allows you to restart it manually from the Actions tab
+on: [push, workflow_dispatch] # This ensures it runs INSTANTLY on any file save/commit
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    # GitHub Actions timeout after 6 hours. This keeps it alive for the max duration.
     timeout-minutes: 360 
 
     steps:
@@ -28,7 +24,7 @@ jobs:
     - name: Install Python Dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install pyTelegramBotAPI requests pydub openai-whisper kaggle google-genai soundfile numpy kaggle_benchmarks
+        pip install pyTelegramBotAPI requests pydub openai-whisper kaggle google-genai soundfile numpy
 
     - name: Run Telegram Bot
       run: python bot.py
