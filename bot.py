@@ -81,7 +81,14 @@ user_api_managers = {}
 HISTORY_DIR = f"{WORKING_DIR}/history_data"
 DATASET_SLUG = "vathsamajibail/data-beach"
 
-TELEGRAM_BOT_TOKEN = "8538315366:AAEbO6mMCBxCOa1vTvN0JkZo2I5U0cS344I"
+# ==========================================
+# SECURE TELEGRAM TOKEN FETCHING
+# ==========================================
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+if not TELEGRAM_BOT_TOKEN:
+    print("❌ ERROR: TELEGRAM_BOT_TOKEN is missing! Please add it to GitHub Secrets.")
+    sys.exit(1)
+
 CHANNEL_ID = "-1003926894558"
 
 print("🧠 Loading local offline Whisper-Base model on Runner CPU...")
@@ -1538,6 +1545,15 @@ if __name__ == "__main__":
     try:
         load_history()
         bot.remove_webhook()
-        time.sleep(1)
-    except: pass
-    bot.infinity_polling(skip_pending=True)
+        print("⏳ Waiting 5 seconds for any ghost connections to drop...")
+        time.sleep(5)
+    except Exception as e:
+        pass
+        
+    while True:
+        try:
+            print("🚀 Starting bot polling...")
+            bot.infinity_polling(skip_pending=True)
+        except Exception as e:
+            print(f"❌ Polling crashed (likely 409 conflict). Retrying in 10 seconds... Error: {e}")
+            time.sleep(10)
