@@ -1,38 +1,60 @@
-name: Telegram Video Generator Bot
+name: Serverless Video Generator API
 
-on: [push, workflow_dispatch]
+# This allows the HTML Frontend to trigger the action!
+on:
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: 'Text script for video'
+        required: true
 
+# This queues jobs one by one automatically!
 concurrency:
-  group: telegram-bot
-  cancel-in-progress: true
+  group: video-queue
+  cancel-in-progress: false 
 
 jobs:
-  run-bot:
+  generate:
     runs-on: ubuntu-latest
-    timeout-minutes: 360 
-
+    permissions:
+      contents: write # Needed to upload to GitHub Releases
+    
     steps:
     - name: Checkout repository
       uses: actions/checkout@v3
+
+    # THIS IS THE MAGIC FIX FOR THE 2 MINUTE DELAY
+    - name: ⚡ Cache Whisper, Pip, and Datasets
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cache/pip
+          ~/.cache/whisper
+          ./input
+        key: video-bot-cache-v1
 
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.10'
 
-    - name: Install System Dependencies (FFmpeg)
-      run: |
-        sudo apt-get update -y
-        sudo apt-get install -y ffmpeg
+    - name: Install Python Dependencies (Instant via Cache)
+      run: pip install requests pydub openai-whisper kaggle google-genai soundfile numpy
 
-    - name: Install Python Dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install pyTelegramBotAPI requests pydub openai-whisper kaggle google-genai soundfile numpy
-
-    - name: Run Telegram Bot
+    - name: Run Video Generation Backend
       env:
-        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        PROMPT: ${{ github.event.inputs.prompt }}
         GIST_ID: ${{ secrets.GIST_ID }}
         GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
-      run: python bot.py
+        GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+        KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+      run: python backend.py
+
+    - name: 🚀 Upload Final Video to GitHub Releases
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        # Creates a unique release and attaches the MP4 file for the frontend to download
+        TAG="video-$(date +%s)"
+        gh release create "$TAG" ./working/final_*.mp4 --title "Video $TAG" --notes "Prompt: ${{ github.event.inputs.prompt }}"
