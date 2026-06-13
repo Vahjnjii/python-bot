@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Auto-Video Maker OS</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #0d1117; color: #c9d1d9; margin: 0; padding: 0; display: flex; flex-direction: column; height: 100vh; }
+        
+        /* PATTERN LOCK UI */
+        #lock-screen { position: absolute; top:0; left:0; right:0; bottom:0; background: #0d1117; z-index: 1000; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+        .pattern-grid { display: grid; grid-template-columns: repeat(3, 80px); gap: 20px; }
+        .dot { width: 30px; height: 30px; background: #30363d; border-radius: 50%; display: flex; align-items: center; justify-content: center; user-select: none; }
+        .dot.active { background: #58a6ff; box-shadow: 0 0 15px #58a6ff; }
+        
+        /* CHAT UI */
+        #app-container { display: none; flex-direction: column; height: 100%; max-width: 600px; margin: 0 auto; background: #161b22; border-left: 1px solid #30363d; border-right: 1px solid #30363d; }
+        .header { padding: 15px; background: #21262d; text-align: center; border-bottom: 1px solid #30363d; font-weight: bold; }
+        .chat-box { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+        .message { max-width: 80%; padding: 12px; border-radius: 8px; line-height: 1.4; }
+        .msg-bot { background: #21262d; align-self: flex-start; border-bottom-left-radius: 2px; }
+        .msg-user { background: #1f6feb; color: white; align-self: flex-end; border-bottom-right-radius: 2px; }
+        
+        .input-area { padding: 15px; background: #21262d; border-top: 1px solid #30363d; display: flex; gap: 10px; }
+        input[type="text"] { flex: 1; padding: 12px; border-radius: 20px; border: 1px solid #30363d; background: #0d1117; color: white; outline: none; }
+        button { padding: 10px 20px; border-radius: 20px; background: #238636; color: white; border: none; font-weight: bold; cursor: pointer; }
+        button:hover { background: #2ea043; }
+        
+        /* QUEUE LIST */
+        .queue-box { background: #0d1117; padding: 10px; font-size: 12px; color: #8b949e; text-align: center; border-bottom: 1px solid #30363d; }
+    </style>
+</head>
+<body>
+
+    <!-- PATTERN LOCK SCREEN -->
+    <div id="lock-screen">
+        <h2 id="lock-title">Draw Pattern to Login</h2>
+        <p id="lock-subtitle" style="color:#8b949e; margin-bottom: 30px;">(First time setup: Draw your new pattern)</p>
+        <div class="pattern-grid" id="pattern-grid">
+            <!-- 9 Dots -->
+            <div class="dot" data-val="1"></div><div class="dot" data-val="2"></div><div class="dot" data-val="3"></div>
+            <div class="dot" data-val="4"></div><div class="dot" data-val="5"></div><div class="dot" data-val="6"></div>
+            <div class="dot" data-val="7"></div><div class="dot" data-val="8"></div><div class="dot" data-val="9"></div>
+        </div>
+        <button onclick="resetLock()" style="margin-top: 30px; background: #da3633;">Reset Setup</button>
+    </div>
+
+    <!-- MAIN CHAT APP -->
+    <div id="app-container">
+        <div class="header">🎬 Auto-Video Maker Workspace</div>
+        <div class="queue-box" id="queue-status">📡 Checking GitHub Actions... No active jobs.</div>
+        
+        <div class="chat-box" id="chat-box">
+            <div class="message msg-bot">👋 Welcome back! The Action Cache is hot. Send a script below to generate a video instantly.</div>
+        </div>
+        
+        <div class="input-area">
+            <input type="text" id="prompt-input" placeholder="Type script (bingo bingo) or Kaggle command...">
+            <button onclick="sendJob()">Send</button>
+        </div>
+    </div>
+
+<script>
+    /* ================= PATTERN LOCK LOGIC ================= */
+    const grid = document.getElementById('pattern-grid');
+    let isDrawing = false;
+    let currentPattern = [];
+    
+    // Quick Hash function for pattern
+    const hashPattern = str => btoa(str).replace(/=/g, '');
+
+    grid.addEventListener('mousedown', () => { isDrawing = true; currentPattern = []; clearDots(); });
+    document.addEventListener('mouseup', () => { if(isDrawing) { isDrawing = false; checkPattern(); } });
+    
+    document.querySelectorAll('.dot').forEach(dot => {
+        dot.addEventListener('mouseenter', (e) => {
+            if (isDrawing && !currentPattern.includes(e.target.dataset.val)) {
+                e.target.classList.add('active');
+                currentPattern.push(e.target.dataset.val);
+            }
+        });
+        // For mobile touch support
+        dot.addEventListener('touchmove', (e) => {
+            let touch = e.touches[0];
+            let element = document.elementFromPoint(touch.clientX, touch.clientY);
+            if(element && element.classList.contains('dot') && isDrawing && !currentPattern.includes(element.dataset.val)) {
+                element.classList.add('active');
+                currentPattern.push(element.dataset.val);
+            }
+        });
+    });
+    grid.addEventListener('touchstart', () => { isDrawing = true; currentPattern = []; clearDots(); });
+    document.addEventListener('touchend', () => { if(isDrawing) { isDrawing = false; checkPattern(); } });
+
+    function clearDots() { document.querySelectorAll('.dot').forEach(d => d.classList.remove('active')); }
+
+    function checkPattern() {
+        const patternStr = currentPattern.join('-');
+        if(patternStr.length < 3) { clearDots(); return; } // Too short
+        
+        const hashed = hashPattern(patternStr);
+        const savedPattern = localStorage.getItem('saved_lock');
+        
+        if (!savedPattern) {
+            // First time setup
+            localStorage.setItem('saved_lock', hashed);
+            alert("Pattern Saved! Please enter GitHub Personal Access Token to link UI to your backend.");
+            const pat = prompt("Enter GitHub PAT:");
+            localStorage.setItem('gh_pat', btoa(pat)); // Store encrypted by pattern logic in real prod
+            unlockApp();
+        } else {
+            // Login check
+            if (savedPattern === hashed) {
+                unlockApp();
+            } else {
+                document.getElementById('lock-title').innerText = "❌ Wrong Pattern";
+                document.getElementById('lock-title').style.color = "#da3633";
+                setTimeout(() => {
+                    document.getElementById('lock-title').innerText = "Draw Pattern to Login";
+                    document.getElementById('lock-title').style.color = "#c9d1d9";
+                    clearDots();
+                }, 1000);
+            }
+        }
+    }
+
+    function resetLock() {
+        localStorage.removeItem('saved_lock');
+        localStorage.removeItem('gh_pat');
+        alert("Reset! Draw a new pattern.");
+        clearDots();
+    }
+
+    function unlockApp() {
+        document.getElementById('lock-screen').style.display = 'none';
+        document.getElementById('app-container').style.display = 'flex';
+        pollGitHubAPI();
+    }
+
+    /* ================= GITHUB API LOGIC (FRONTEND QUEUE) ================= */
+    // Change these to your actual GitHub info
+    const GITHUB_OWNER = "YOUR_GITHUB_USERNAME"; 
+    const GITHUB_REPO = "YOUR_REPO_NAME";
+
+    function getAuthHeader() {
+        return { "Authorization": `Bearer ${atob(localStorage.getItem('gh_pat'))}`, "Accept": "application/vnd.github.v3+json" };
+    }
+
+    function addMessage(text, type) {
+        const box = document.getElementById('chat-box');
+        const msg = document.createElement('div');
+        msg.className = `message ${type}`;
+        msg.innerHTML = text;
+        box.appendChild(msg);
+        box.scrollTop = box.scrollHeight;
+    }
+
+    // Trigger GitHub Action
+    async function sendJob() {
+        const input = document.getElementById('prompt-input');
+        const text = input.value.trim();
+        if(!text) return;
+
+        addMessage(text, 'msg-user');
+        input.value = '';
+
+        try {
+            const resp = await fetch(`https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/actions/workflows/bot.yml/dispatches`, {
+                method: "POST",
+                headers: getAuthHeader(),
+                body: JSON.stringify({ ref: "main", inputs: { prompt: text } })
+            });
+            if(resp.ok) {
+                addMessage("🚀 Job added to GitHub Actions Queue!", 'msg-bot');
+                setTimeout(pollGitHubAPI, 2000); // Check status
+            } else {
+                addMessage("❌ Error triggering action. Check PAT.", 'msg-bot');
+            }
+        } catch(e) { addMessage(`❌ Connection Error: ${e}`, 'msg-bot'); }
+    }
+
+    // Poll Actions to show Queue on Frontend
+    async function pollGitHubAPI() {
+        try {
+            // Check Queue Status
+            const runsResp = await fetch(`https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/actions/runs?status=in_progress`, { headers: getAuthHeader() });
+            const runs = await runsResp.json();
+            
+            const qBox = document.getElementById('queue-status');
+            if(runs.total_count > 0) {
+                qBox.innerHTML = `📡 <b>PROCESSING:</b> ${runs.total_count} job(s) in queue...`;
+                qBox.style.color = "#58a6ff";
+            } else {
+                qBox.innerHTML = `✅ Queue Empty. Ready for tasks.`;
+                qBox.style.color = "#3fb950";
+            }
+
+            // Check Releases for new Videos
+            const relResp = await fetch(`https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases`, { headers: getAuthHeader() });
+            const releases = await relResp.json();
+            
+            // Logic to display newly fetched videos in chat (simplified for space)
+            // You can store latest release ID in localStorage and compare it to push to chat UI
+            
+        } catch(e) { console.error("Poll Error:", e); }
+        
+        setTimeout(pollGitHubAPI, 10000); // Check every 10 seconds
+    }
+
+    // Auto Unlock if already valid
+    if(localStorage.getItem('saved_lock') && false) {
+        // We force pattern lock every page load by default. 
+        // If you want them to skip if refreshed within 1 hour, add timestamp logic here!
+    }
+</script>
+</body>
+</html>
