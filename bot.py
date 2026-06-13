@@ -14,6 +14,7 @@ import shutil
 import wave
 import glob
 import logging
+import requests
 from contextlib import redirect_stdout, redirect_stderr
 import numpy as np
 import soundfile as sf
@@ -74,12 +75,6 @@ class SmartAPIKeyManager:
 
 api_manager = SmartAPIKeyManager(API_KEYS)
 user_api_managers = {}  
-
-# ==========================================
-# KAGGLE DATASET HISTORY SETUP
-# ==========================================
-HISTORY_DIR = f"{WORKING_DIR}/history_data"
-DATASET_SLUG = "vathsamajibail/data-beach"
 
 # ==========================================
 # SECURE TELEGRAM TOKEN FETCHING
@@ -150,6 +145,67 @@ def clean_old_history(h_list):
     return valid[:500]
 
 # ==========================================
+# GITHUB GIST CLOUD DATABASE LOGIC
+# ==========================================
+def load_history():
+    global batch_registry, chat_lang_counters, chat_history, user_settings, user_api_managers
+    gist_id = os.environ.get("GIST_ID")
+    token = os.environ.get("GIST_TOKEN")
+    
+    if not gist_id or not token:
+        print("⚠️ GIST_ID or GIST_TOKEN missing in GitHub Secrets. Bot will start with a blank history.")
+        return
+        
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
+    try:
+        resp = requests.get(f"https://api.github.com/gists/{gist_id}", headers=headers, timeout=15)
+        if resp.status_code == 200:
+            files = resp.json().get("files", {})
+            if "database.json" in files:
+                content = files["database.json"]["content"]
+                if content.strip() == "{}": return # Empty database
+                
+                data = json.loads(content)
+                with state_lock:
+                    batch_registry.update(data.get("registry", {}))
+                    for cid_str, counters in data.get("counters", {}).items(): chat_lang_counters[int(cid_str)] = counters
+                    for cid_str, s in data.get("settings", {}).items(): user_settings[int(cid_str)] = s
+                    for cid_str, h_list in data.get("history", {}).items(): chat_history[int(cid_str)] = clean_old_history(h_list)
+                    
+                for cid, s in user_settings.items():
+                    if "api_keys" in s and s["api_keys"]:
+                        user_api_managers[cid] = SmartAPIKeyManager(s["api_keys"])
+                print("✅ History successfully loaded from GitHub Gist!")
+        else:
+            print(f"⚠️ Failed to load Gist. HTTP {resp.status_code}")
+    except Exception as e:
+        print(f"Database Load Error: {e}")
+
+def save_history_async():
+    gist_id = os.environ.get("GIST_ID")
+    token = os.environ.get("GIST_TOKEN")
+    if not gist_id or not token: return
+    
+    try:
+        with state_lock:
+            data = {
+                "registry": batch_registry,
+                "counters": chat_lang_counters,
+                "settings": user_settings,
+                "history": chat_history
+            }
+            content = json.dumps(data)
+            
+        headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
+        payload = {"files": {"database.json": {"content": content}}}
+        requests.patch(f"https://api.github.com/gists/{gist_id}", headers=headers, json=payload, timeout=15)
+    except Exception as e:
+        print(f"Database Save Error: {e}")
+
+def trigger_save(): 
+    threading.Thread(target=save_history_async, daemon=True).start()
+
+# ==========================================
 # GEMINI AUDIO & API LOGIC
 # ==========================================
 def generate_audio_with_gemini(text, voice="Puck", model="gemini-2.5-flash-preview-tts", chat_id=None, max_attempts=15, on_api_fail=None):
@@ -195,59 +251,6 @@ def save_audio_to_file(audio_bytes, filename):
     except:
         return False, 0
 
-def load_history():
-    global batch_registry, chat_lang_counters, chat_history, user_settings, user_api_managers
-    if not os.environ.get('KAGGLE_USERNAME') or not os.environ.get('KAGGLE_KEY'):
-        return # Skip loading if no credentials
-    try:
-        from kaggle.api.kaggle_api_extended import KaggleApi
-        with SuppressKaggleLogs():
-            api = KaggleApi()
-            api.authenticate()
-            os.makedirs(HISTORY_DIR, exist_ok=True)
-            api.dataset_download_files(DATASET_SLUG, path=HISTORY_DIR, unzip=True)
-        for file in os.listdir(HISTORY_DIR):
-            if file == "history.json" or file == "registry.json":
-                with open(os.path.join(HISTORY_DIR, file), "r") as f: data = json.load(f)
-                with state_lock:
-                    batch_registry.update(data.get("registry", {}))
-                    for cid_str, counters in data.get("counters", {}).items(): chat_lang_counters[int(cid_str)] = counters
-                    for cid_str, s in data.get("settings", {}).items(): user_settings[int(cid_str)] = s
-                    if "history" in data:
-                        for cid_str, h_list in data.get("history", {}).items(): chat_history[int(cid_str)] = clean_old_history(h_list)
-            elif file.startswith("user_") and file.endswith(".json"):
-                chat_id = int(file.split("_")[1].split(".")[0])
-                with open(os.path.join(HISTORY_DIR, file), "r") as f:
-                    with state_lock: chat_history[chat_id] = clean_old_history(json.load(f))
-        for cid, s in user_settings.items():
-            if "api_keys" in s and s["api_keys"]:
-                user_api_managers[cid] = SmartAPIKeyManager(s["api_keys"])
-    except Exception as e: 
-        print("Dataset History Error:", e)
-
-def save_history_async():
-    if not os.environ.get('KAGGLE_USERNAME') or not os.environ.get('KAGGLE_KEY'): return
-    try:
-        from kaggle.api.kaggle_api_extended import KaggleApi
-        with SuppressKaggleLogs():
-            api = KaggleApi()
-            api.authenticate()
-            if os.path.exists(HISTORY_DIR): shutil.rmtree(HISTORY_DIR)
-            os.makedirs(HISTORY_DIR, exist_ok=True)
-            
-            with state_lock:
-                reg_data = {"registry": batch_registry, "counters": chat_lang_counters, "settings": user_settings}
-                with open(os.path.join(HISTORY_DIR, "registry.json"), "w") as f: json.dump(reg_data, f)
-                for chat_id, hist in chat_history.items():
-                    with open(os.path.join(HISTORY_DIR, f"user_{chat_id}.json"), "w") as f: json.dump(hist, f)
-            meta = {"title": "data-beach", "id": DATASET_SLUG, "licenses": [{"name": "CC0-1.0"}]}
-            with open(os.path.join(HISTORY_DIR, "dataset-metadata.json"), "w") as f: json.dump(meta, f)
-            
-            api.dataset_create_version(HISTORY_DIR, version_notes="Auto-update", dir_mode="zip", quiet=True)
-    except: pass
-
-def trigger_save(): threading.Thread(target=save_history_async, daemon=True).start()
-
 # ==========================================
 # PROCESSING UTILITIES
 # ==========================================
@@ -271,10 +274,6 @@ def is_bingo_trigger(word_text):
 # HASHTAG & TITLE ENGINE (NO AI REQUIRED)
 # ==========================================
 def generate_title_and_hashtags(transcribed_text):
-    """
-    Extracts the first 10 words as the title and appends 
-    #Country #Language as requested by the user.
-    """
     if not transcribed_text or len(transcribed_text.strip()) < 3: 
         return "Cinematic Video\n#Country #Language"
         
@@ -526,7 +525,6 @@ def prep_chunk_parallel(sj, vs, ve, all_words, audio_seg, output_dir, chat_id, s
         ass_subtitle_path = os.path.join(output_dir, f"sub_{job_id}.ass")
         full_text = generate_ass_from_words(chunk_words, ass_subtitle_path, sub_pos, sub_bg)
         
-        # New static metadata generator
         llm_metadata = generate_title_and_hashtags(full_text)
         
         with state_lock:
@@ -692,7 +690,6 @@ def send_settings_ui(chat_id, message_id=None, menu="main"):
         markup.row(types.InlineKeyboardButton(f"📍 Sub Pos: {pos_text}", callback_data="toggle_sub_pos"), types.InlineKeyboardButton(f"💬 Sub BG: {bg_text}", callback_data="toggle_sub_bg"))
         markup.row(types.InlineKeyboardButton(f"🔑 API Keys", callback_data="set_menu_apikey"), types.InlineKeyboardButton(f"🎙️ Long TTS: {tts_text}", callback_data="toggle_long_tts"))
         
-        # NEW KAGGLE BUTTONS
         markup.row(types.InlineKeyboardButton(f"🔐 Kaggle Login", callback_data="set_menu_kaggle_login_input"), types.InlineKeyboardButton(f"📥 Fetch Dataset", callback_data="set_menu_fetch_dataset_input"))
                    
         if long_tts: markup.add(types.InlineKeyboardButton(f"📏 Chunk Size: {chunk_sz} Chars ({chunk_sz/1000.0}m)", callback_data="set_menu_long_tts"))
@@ -773,7 +770,7 @@ def send_settings_ui(chat_id, message_id=None, menu="main"):
 def show_settings(message): send_settings_ui(message.chat.id, menu="main")
 
 # ==========================================
-# NEW KAGGLE SETTINGS HANDLERS
+# KAGGLE SETTINGS HANDLERS
 # ==========================================
 @bot.callback_query_handler(func=lambda call: call.data == "set_menu_kaggle_login_input")
 def ask_kaggle_credentials_cb(call):
@@ -788,8 +785,7 @@ def process_kaggle_credentials(message):
     if len(parts) >= 2:
         os.environ['KAGGLE_USERNAME'] = parts[0].strip()
         os.environ['KAGGLE_KEY'] = parts[1].strip()
-        bot.send_message(message.chat.id, "✅ Kaggle credentials set successfully! Loading history...")
-        load_history()
+        bot.send_message(message.chat.id, "✅ Kaggle credentials set temporarily for this session!")
         send_settings_ui(message.chat.id, menu="main")
     else:
         msg = bot.send_message(message.chat.id, "⚠️ Invalid format. Please send username and API key separated by space, or /cancel.")
@@ -805,6 +801,11 @@ def process_fetch_dataset_step(message):
         send_settings_ui(message.chat.id, menu="main")
         return
     
+    if not os.environ.get('KAGGLE_USERNAME') or not os.environ.get('KAGGLE_KEY'):
+        bot.send_message(message.chat.id, "⚠️ You must set your Kaggle Login first! (Settings -> Kaggle Login)")
+        send_settings_ui(message.chat.id, menu="main")
+        return
+
     dataset_slug = message.text.strip().replace("https://www.kaggle.com/datasets/", "")
     msg = bot.send_message(message.chat.id, f"⏳ Downloading dataset `{dataset_slug}`...\nThis may take a few minutes.", parse_mode="Markdown")
     
@@ -822,7 +823,7 @@ def process_fetch_dataset_step(message):
             bot.edit_message_text(f"✅ Dataset `{dataset_slug}` downloaded successfully!\nYou can now select it in Video/Audio Data settings.", chat_id=msg.chat.id, message_id=msg.message_id, parse_mode="Markdown")
             send_settings_ui(message.chat.id, menu="dataset")
         except Exception as e:
-            bot.edit_message_text(f"❌ Failed to download dataset. Did you set Kaggle login first?\nError: {str(e)}", chat_id=msg.chat.id, message_id=msg.message_id)
+            bot.edit_message_text(f"❌ Failed to download dataset.\nError: {str(e)}", chat_id=msg.chat.id, message_id=msg.message_id)
             send_settings_ui(message.chat.id, menu="main")
 
     threading.Thread(target=download_task, daemon=True).start()
