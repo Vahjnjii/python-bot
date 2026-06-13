@@ -150,45 +150,6 @@ def clean_old_history(h_list):
     return valid[:500]
 
 # ==========================================
-# DYNAMIC KAGGLE DOWNLOADER (TELEGRAM COMMANDS)
-# ==========================================
-@bot.message_handler(commands=['set_kaggle'])
-def handle_set_kaggle(message):
-    parts = message.text.split()
-    if len(parts) == 3:
-        os.environ['KAGGLE_USERNAME'] = parts[1].strip()
-        os.environ['KAGGLE_KEY'] = parts[2].strip()
-        bot.reply_to(message, "✅ Kaggle credentials set successfully! You can now use `/fetch_dataset`.", parse_mode="Markdown")
-        load_history()
-    else:
-        bot.reply_to(message, "⚠️ Usage: `/set_kaggle <username> <api_key>`", parse_mode="Markdown")
-
-@bot.message_handler(commands=['fetch_dataset'])
-def handle_fetch_dataset(message):
-    parts = message.text.split()
-    if len(parts) == 2:
-        dataset_slug = parts[1].strip()
-        dataset_slug = dataset_slug.replace("https://www.kaggle.com/datasets/", "")
-        msg = bot.reply_to(message, f"⏳ Downloading dataset `{dataset_slug}` into GitHub Actions...\nThis may take a few minutes.", parse_mode="Markdown")
-        
-        try:
-            from kaggle.api.kaggle_api_extended import KaggleApi
-            api = KaggleApi()
-            api.authenticate()
-            
-            # Save into uniquely named folder
-            folder_name = dataset_slug.split("/")[-1]
-            download_path = os.path.join(INPUT_DIR, folder_name)
-            os.makedirs(download_path, exist_ok=True)
-            
-            api.dataset_download_files(dataset_slug, path=download_path, unzip=True)
-            bot.edit_message_text(f"✅ Dataset `{dataset_slug}` downloaded successfully!\nIt is now available in your video settings.", chat_id=msg.chat.id, message_id=msg.message_id, parse_mode="Markdown")
-        except Exception as e:
-            bot.edit_message_text(f"❌ Failed to download dataset. Did you `/set_kaggle` first?\nError: {str(e)}", chat_id=msg.chat.id, message_id=msg.message_id)
-    else:
-        bot.reply_to(message, "⚠️ Usage: `/fetch_dataset <username/dataset-slug>`", parse_mode="Markdown")
-
-# ==========================================
 # GEMINI AUDIO & API LOGIC
 # ==========================================
 def generate_audio_with_gemini(text, voice="Puck", model="gemini-2.5-flash-preview-tts", chat_id=None, max_attempts=15, on_api_fail=None):
@@ -730,6 +691,9 @@ def send_settings_ui(chat_id, message_id=None, menu="main"):
         markup.row(types.InlineKeyboardButton(f"⬛ Overlay: {overlay_text}", callback_data="set_menu_overlay"), types.InlineKeyboardButton(f"✂️ Vis Cuts: {vis_text}", callback_data="set_menu_viscuts"))
         markup.row(types.InlineKeyboardButton(f"📍 Sub Pos: {pos_text}", callback_data="toggle_sub_pos"), types.InlineKeyboardButton(f"💬 Sub BG: {bg_text}", callback_data="toggle_sub_bg"))
         markup.row(types.InlineKeyboardButton(f"🔑 API Keys", callback_data="set_menu_apikey"), types.InlineKeyboardButton(f"🎙️ Long TTS: {tts_text}", callback_data="toggle_long_tts"))
+        
+        # NEW KAGGLE BUTTONS
+        markup.row(types.InlineKeyboardButton(f"🔐 Kaggle Login", callback_data="set_menu_kaggle_login_input"), types.InlineKeyboardButton(f"📥 Fetch Dataset", callback_data="set_menu_fetch_dataset_input"))
                    
         if long_tts: markup.add(types.InlineKeyboardButton(f"📏 Chunk Size: {chunk_sz} Chars ({chunk_sz/1000.0}m)", callback_data="set_menu_long_tts"))
         markup.add(types.InlineKeyboardButton("✅ Done / Save", callback_data="collapse"))
@@ -780,7 +744,7 @@ def send_settings_ui(chat_id, message_id=None, menu="main"):
         for d in datasets: btns.append(types.InlineKeyboardButton(f"{'✅ ' if (d in ds_selected and not is_mix) else '📁 '}{d}", callback_data=f"set_ds_{d}"))
         markup.add(*btns)
         markup.row(types.InlineKeyboardButton("🔙 Back", callback_data="set_menu_main"))
-        text = "🎬 **Select Video Dataset(s)**\nClick to select multiple specific folders. 'Mix' uses all folders.\n*(Use `/fetch_dataset <url>` to download new folders)*"
+        text = "🎬 **Select Video Dataset(s)**\nClick to select multiple specific folders. 'Mix' uses all folders.\n*(Use `📥 Fetch Dataset` in Settings to download new folders)*"
 
     elif menu == "bgm_dataset":
         markup = types.InlineKeyboardMarkup(row_width=2)
@@ -808,6 +772,64 @@ def send_settings_ui(chat_id, message_id=None, menu="main"):
 @bot.message_handler(func=lambda m: m.text == "⚙️ Settings")
 def show_settings(message): send_settings_ui(message.chat.id, menu="main")
 
+# ==========================================
+# NEW KAGGLE SETTINGS HANDLERS
+# ==========================================
+@bot.callback_query_handler(func=lambda call: call.data == "set_menu_kaggle_login_input")
+def ask_kaggle_credentials_cb(call):
+    msg = bot.send_message(call.message.chat.id, "🔐 Send your Kaggle Username and API Key separated by a space:\n*Example:* `username abc123def456`\n*(Send /cancel to abort)*", parse_mode="Markdown")
+    bot.register_next_step_handler(msg, process_kaggle_credentials)
+
+def process_kaggle_credentials(message):
+    if message.text == '/cancel':
+        send_settings_ui(message.chat.id, menu="main")
+        return
+    parts = message.text.split()
+    if len(parts) >= 2:
+        os.environ['KAGGLE_USERNAME'] = parts[0].strip()
+        os.environ['KAGGLE_KEY'] = parts[1].strip()
+        bot.send_message(message.chat.id, "✅ Kaggle credentials set successfully! Loading history...")
+        load_history()
+        send_settings_ui(message.chat.id, menu="main")
+    else:
+        msg = bot.send_message(message.chat.id, "⚠️ Invalid format. Please send username and API key separated by space, or /cancel.")
+        bot.register_next_step_handler(msg, process_kaggle_credentials)
+
+@bot.callback_query_handler(func=lambda call: call.data == "set_menu_fetch_dataset_input")
+def ask_fetch_dataset_cb(call):
+    msg = bot.send_message(call.message.chat.id, "📥 Send the Kaggle dataset URL or slug to download:\n*Example:* `vathsamajibail/data-beach`\n*(Send /cancel to abort)*", parse_mode="Markdown")
+    bot.register_next_step_handler(msg, process_fetch_dataset_step)
+
+def process_fetch_dataset_step(message):
+    if message.text == '/cancel':
+        send_settings_ui(message.chat.id, menu="main")
+        return
+    
+    dataset_slug = message.text.strip().replace("https://www.kaggle.com/datasets/", "")
+    msg = bot.send_message(message.chat.id, f"⏳ Downloading dataset `{dataset_slug}`...\nThis may take a few minutes.", parse_mode="Markdown")
+    
+    def download_task():
+        try:
+            from kaggle.api.kaggle_api_extended import KaggleApi
+            api = KaggleApi()
+            api.authenticate()
+            
+            folder_name = dataset_slug.split("/")[-1]
+            download_path = os.path.join(INPUT_DIR, folder_name)
+            os.makedirs(download_path, exist_ok=True)
+            
+            api.dataset_download_files(dataset_slug, path=download_path, unzip=True)
+            bot.edit_message_text(f"✅ Dataset `{dataset_slug}` downloaded successfully!\nYou can now select it in Video/Audio Data settings.", chat_id=msg.chat.id, message_id=msg.message_id, parse_mode="Markdown")
+            send_settings_ui(message.chat.id, menu="dataset")
+        except Exception as e:
+            bot.edit_message_text(f"❌ Failed to download dataset. Did you set Kaggle login first?\nError: {str(e)}", chat_id=msg.chat.id, message_id=msg.message_id)
+            send_settings_ui(message.chat.id, menu="main")
+
+    threading.Thread(target=download_task, daemon=True).start()
+
+# ==========================================
+# API KEY HANDLER
+# ==========================================
 @bot.callback_query_handler(func=lambda call: call.data == "set_menu_apikey_input")
 def ask_api_keys(call):
     msg = bot.send_message(call.message.chat.id, "🔑 Send your Gemini API Keys separated by commas:\n*(Send /cancel to abort)*", parse_mode="Markdown")
@@ -1174,7 +1196,7 @@ def process_video_job(sj, parent_task):
         else:
             for d in user_dataset:
                 if d in dataset_map: filtered_map[d] = dataset_map[d]
-        if not filtered_map: raise Exception(f"No valid video datasets found. Have you downloaded them via /fetch_dataset?")
+        if not filtered_map: raise Exception(f"No valid video datasets found. Have you downloaded them via `📥 Fetch Dataset` in Settings?")
             
         selected_clips, _ = build_random_background_multi_dataset(filtered_map, audio_duration, vis_cuts)
         
@@ -1494,9 +1516,8 @@ threading.Thread(target=global_master_worker, daemon=True).start()
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
     bot.reply_to(message, "👋 Welcome to the Auto-Video Maker!\n\n"
-                          "⚙️ **Kaggle Setup via Chat:**\n"
-                          "1. `/set_kaggle <username> <api_key>` - Set Kaggle Login.\n"
-                          "2. `/fetch_dataset <url-or-slug>` - Download video datasets.\n\n"
+                          "⚙️ **Setup:**\n"
+                          "Click the **⚙️ Settings** button below to set your Kaggle Login, Gemini API Keys, and download your Datasets.\n\n"
                           "🎙️ Upload Voiceover files OR Send me a Text Script (with 'bingo bingo') to generate AI Voice!\n\n"
                           "⚡ Mode: `Pure Cinematic Glow + 1080p Smart VBV Limit`", reply_markup=get_main_keyboard(), parse_mode="Markdown")
 
