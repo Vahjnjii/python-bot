@@ -1,10 +1,11 @@
 name: Serverless Video Generator API
 
+# This allows the HTML Frontend to trigger the action!
 on:
   workflow_dispatch:
     inputs:
       prompt:
-        description: 'Command or Text Script'
+        description: 'Text script for video'
         required: true
 
 # This queues jobs one by one automatically!
@@ -22,8 +23,8 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v3
 
-    # 🔥 THE MAGIC FIX: Instantly loads Whisper, Pip packages, and Datasets in 1 second!
-    - name: Cache Environment & Datasets
+    # THIS IS THE MAGIC FIX FOR THE 2 MINUTE DELAY
+    - name: ⚡ Cache Whisper, Pip, and Datasets
       uses: actions/cache@v3
       with:
         path: |
@@ -40,24 +41,20 @@ jobs:
     - name: Install Python Dependencies (Instant via Cache)
       run: pip install requests pydub openai-whisper kaggle google-genai soundfile numpy
 
-    - name: Run Backend Script (bot.py)
+    - name: Run Video Generation Backend
       env:
         PROMPT: ${{ github.event.inputs.prompt }}
         GIST_ID: ${{ secrets.GIST_ID }}
         GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
+        GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
         KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
-      run: python bot.py
+      run: python backend.py
 
     - name: 🚀 Upload Final Video to GitHub Releases
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        # Check if a final video was generated
-        if ls ./working/final_*.mp4 1> /dev/null 2>&1; then
-          TAG="video-$(date +%s)"
-          # Uploads video to releases so your frontend can show it
-          gh release create "$TAG" ./working/final_*.mp4 --title "Output: $TAG" --notes "Prompt used: ${{ github.event.inputs.prompt }}"
-        else
-          echo "No video generated (likely a settings/dataset update command)."
-        fi
+        # Creates a unique release and attaches the MP4 file for the frontend to download
+        TAG="video-$(date +%s)"
+        gh release create "$TAG" ./working/final_*.mp4 --title "Video $TAG" --notes "Prompt: ${{ github.event.inputs.prompt }}"
