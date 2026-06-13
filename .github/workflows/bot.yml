@@ -2,7 +2,6 @@ name: Telegram Video Generator Bot
 
 on: [push, workflow_dispatch]
 
-# Cancels the old bot instantly if you save new code
 concurrency:
   group: telegram-bot
   cancel-in-progress: true
@@ -33,6 +32,7 @@ jobs:
 
     - name: Run Telegram Bot
       env:
-        # This securely injects your hidden secret!
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        GIST_ID: ${{ secrets.GIST_ID }}
+        GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
       run: python bot.py
