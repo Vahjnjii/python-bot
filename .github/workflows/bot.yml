@@ -2,7 +2,7 @@ name: Telegram Video Generator Bot
 
 on: [push, workflow_dispatch]
 
-# THIS IS THE FIX: It cancels any currently running bot when you push new code!
+# Cancels the old bot instantly if you save new code
 concurrency:
   group: telegram-bot
   cancel-in-progress: true
@@ -32,4 +32,7 @@ jobs:
         pip install pyTelegramBotAPI requests pydub openai-whisper kaggle google-genai soundfile numpy
 
     - name: Run Telegram Bot
+      env:
+        # This securely injects your hidden secret!
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       run: python bot.py
